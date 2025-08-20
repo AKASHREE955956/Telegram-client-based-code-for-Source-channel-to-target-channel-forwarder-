@@ -1,0 +1,102 @@
+import asyncio, random, pathlib, re
+from telethon import TelegramClient, errors, utils
+from telethon.tl.types import Message
+
+try:
+    from telethon.tl.functions.messages import CopyMessagesRequest
+    HAS_COPY = True
+except ImportError:
+    HAS_COPY = False  # old Telethon
+
+api_id, api_hash = your api id , "your api hash"
+session = "your session "
+
+SRC_CH = -1002152213385
+DST_GRP = -1002409387627
+TOPICID = 632
+START, END = 114, 453
+DELAY =  1 # seconds
+
+# Words to replace: {"old_word": "new_word"}
+REPLACE_WORDS = {
+    "〱𝘐𝘕𝘋𝘐𝘈𝘕 𝘟 𝘞𝘈𝘙𝘙𝘐𝘖𝘙 🖤▕": "@Akashh955956",
+    "uploaded by": "@Akashh955956",
+    "Rahul Yadav": "@akashh955956"
+}
+
+def replace_caption_text(text: str) -> str:
+    if not text:
+        return text
+    new_text = text
+    for old, new in REPLACE_WORDS.items():
+        # case-insensitive replacement
+        new_text = re.sub(re.escape(old), new, new_text, flags=re.IGNORECASE)
+    return new_text
+
+async def copy_via_api(cli, src, mid, caption_text=None):
+    """Use real messages.copyMessages (Telethon ≥ 1.32)."""
+    await cli(CopyMessagesRequest(
+        from_peer=src,
+        id=[mid],
+        random_id=[utils.generate_random_long()],
+        to_peer=DST_GRP,
+        top_msg_id=TOPICID,
+        drop_author=True
+    ))
+    if caption_text:  # Editing after copy to update text
+        await cli.edit_message(DST_GRP, TOPICID, caption_text)
+
+async def reupload(cli, msg: Message):
+    """Fallback for old Telethon: download/upload or reuse server-side file."""
+    if msg.media:
+        await cli.send_file(
+            DST_GRP,
+            file=msg,
+            caption=replace_caption_text(msg.raw_text) or None,
+            reply_to=TOPICID
+        )
+    elif (txt := msg.raw_text.strip()):
+        await cli.send_message(DST_GRP, replace_caption_text(txt), reply_to=TOPICID)
+
+async def main():
+    async with TelegramClient(session, api_id, api_hash) as cli:
+        src = await cli.get_entity(SRC_CH)
+
+        for mid in range(START, END + 1):
+            try:
+                m = await cli.get_messages(src, ids=mid)
+                if not m:
+                    print(f"⚠️  {mid} missing")
+                    continue
+
+                try:
+                    if HAS_COPY:
+                        # Can't modify caption directly with copy; reupload for replaced text
+                        if m.media or m.raw_text:
+                            await reupload(cli, m)
+                        else:
+                            await copy_via_api(cli, src, mid)
+                    else:
+                        await reupload(cli, m)
+
+                    print(f"✅ {mid}")
+                except errors.FloodWaitError as e:
+                    print(f"⏳ FloodWait {e.seconds}s")
+                    await asyncio.sleep(e.seconds)
+                    if HAS_COPY:
+                        if m.media or m.raw_text:
+                            await reupload(cli, m)
+                        else:
+                            await copy_via_api(cli, src, mid)
+                    else:
+                        await reupload(cli, m)
+                    print(f"✅ {mid} after wait")
+
+            except Exception as e:
+                print(f"❌ {mid}: {e}")
+
+            await asyncio.sleep(DELAY)
+        print("🎉 Finished!")
+
+if __name__ == "__main__":
+    asyncio.run(main())
