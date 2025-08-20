@@ -1,0 +1,113 @@
+import asyncio
+from telethon import TelegramClient, errors
+from telethon.tl.types import MessageMediaWebPage
+import time
+
+# Telegram API credentials
+api_id = your api id 
+api_hash = 'your api hash'
+session_name = "your session "
+
+# Config
+SOURCE_CHANNEL_ID = -1002434807203
+TARGET_CHANNEL_ID = -1002570277104
+START_ID = 2000
+END_ID = 555616
+
+# Replace config
+REPLACE_FROM = "『ASTRONAUT』"
+REPLACE_TO = "@akashh955956"
+
+# Delay config
+PER_MESSAGE_DELAY = 1
+BATCH_DELAY_COUNT = 10000
+BATCH_DELAY_SECONDS = 300
+
+MAX_RETRIES = 10
+RETRY_DELAY = 5
+
+async def main():
+    client = TelegramClient(session_name, api_id, api_hash)
+    await client.start()
+
+    sent_count = 0
+    last_forwarded_id = None
+    pinned_msg_id = None
+
+    # Get pinned message from source
+    try:
+        source_pinned = await client.get_pinned_message(SOURCE_CHANNEL_ID)
+        if source_pinned:
+            pinned_msg_id = source_pinned.id
+            print(f"Pinned message in source: {pinned_msg_id}")
+    except Exception as e:
+        print(f"Error getting pinned message: {e}")
+
+    for msg_id in range(START_ID, END_ID + 1):
+        for attempt in range(MAX_RETRIES):
+            try:
+                msg = await client.get_messages(SOURCE_CHANNEL_ID, ids=msg_id)
+                if not msg:
+                    print(f"Message {msg_id} not found.")
+                    break
+
+                content = (msg.text or "").replace(REPLACE_FROM, REPLACE_TO)
+
+                # Case 1: It's a webpage (e.g., link preview)
+                if isinstance(msg.media, MessageMediaWebPage):
+                    forwarded = await client.send_message(
+                        entity=TARGET_CHANNEL_ID,
+                        message=content,
+                        link_preview=True,
+                        parse_mode='html'
+                    )
+                # Case 2: Normal media
+                elif msg.media:
+                    forwarded = await client.send_file(
+                        entity=TARGET_CHANNEL_ID,
+                        file=msg.media,
+                        caption=content,
+                        force_document=False,
+                        parse_mode='html'
+                    )
+                # Case 3: Just text
+                else:
+                    forwarded = await client.send_message(
+                        entity=TARGET_CHANNEL_ID,
+                        message=content,
+                        parse_mode='html'
+                    )
+
+                print(f"[{msg_id}] Forwarded successfully.")
+                sent_count += 1
+                last_forwarded_id = forwarded.id
+
+                # Pin if it was pinned in source
+                if msg_id == pinned_msg_id:
+                    try:
+                        await client.pin_message(TARGET_CHANNEL_ID, message=last_forwarded_id, notify=False)
+                        print(f"[{msg_id}] Pinned in target.")
+                    except Exception as e:
+                        print(f"[{msg_id}] Error pinning: {e}")
+
+                break  # Success, break retry loop
+
+            except errors.FloodWaitError as e:
+                print(f"FloodWaitError: Waiting {e.seconds} sec")
+                await asyncio.sleep(e.seconds)
+            except Exception as e:
+                print(f"Error on msg {msg_id}, attempt {attempt+1}: {e}")
+                await asyncio.sleep(RETRY_DELAY)
+
+        # Delay after each message
+        await asyncio.sleep(PER_MESSAGE_DELAY)
+
+        # Delay after every batch
+        if sent_count > 0 and sent_count % BATCH_DELAY_COUNT == 0:
+            print(f"Sleeping {BATCH_DELAY_SECONDS}s after {sent_count} messages.")
+            await asyncio.sleep(BATCH_DELAY_SECONDS)
+
+    print("All messages processed.")
+
+if __name__ == "__main__":
+    asyncio.run(main())
