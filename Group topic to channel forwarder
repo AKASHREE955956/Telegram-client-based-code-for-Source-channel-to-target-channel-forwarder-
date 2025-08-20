@@ -1,0 +1,237 @@
+import asyncio
+from telethon import TelegramClient
+from telethon.errors import FloodWaitError
+import re
+
+# ──► CONFIG ◄──
+api_id = your api  id 
+api_hash = 'your api'
+session_name = "your session "
+
+SOURCE_GROUP = -1002845203995         # Replace with source group ID
+SOURCE_TOPIC = 4343                  # Topic ID in source group
+TARGET_CHANNEL = -1002861699178         # Replace with target channel ID
+TARGET_GROUP = -1002861699178           # Same as source group ID (if same group)
+TARGET_TOPIC = 4                 # Target topic ID (same as source if needed)
+
+REPLACE_TEXTS = [
+    '『ASTRONAUT』',
+    'ᴿǿ𝕪 𝒔ɦà𝒃🦅',
+    '🌾 Nadan Parinde™ 𓅪',
+    '',  # Empty strings
+]
+REPLACE_WITH = '@Akashh955956'
+
+
+def extract_index_number(caption: str):
+    """Extract index number from caption like 'Index 001', 'Index 123', etc."""
+    if not caption:
+        return None
+    
+    # Pattern to match "Index XXX" where XXX is any number
+    patterns = [
+        r'Index\s+(\d+)',           # Index 123
+        r'index\s+(\d+)',           # index 123
+        r'INDEX\s+(\d+)',           # INDEX 123
+        r'Index\s*:\s*(\d+)',       # Index: 123
+        r'index\s*:\s*(\d+)',       # index: 123
+        r'INDEX\s*:\s*(\d+)',       # INDEX: 123
+        r'Index\s*-\s*(\d+)',       # Index - 123
+        r'index\s*-\s*(\d+)',       # index - 123
+        r'INDEX\s*-\s*(\d+)',       # INDEX - 123
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, caption, re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+    
+    return None
+
+
+def clean_caption(caption: str):
+    if not caption:
+        return '@Akash955956'  # Default caption if none exists
+    
+    # Clean the caption
+    cleaned = caption
+    for text in REPLACE_TEXTS:
+        if text:  # Skip empty strings in this loop
+            cleaned = re.sub(re.escape(text), REPLACE_WITH, cleaned, flags=re.IGNORECASE)
+    
+    # If caption becomes empty after cleaning, add default
+    if not cleaned.strip():
+        cleaned = '@Akash955956'
+    
+    return cleaned
+
+
+async def get_indexed_messages(client, group_id, topic_id=None):
+    """Get messages with Index numbers from a specific topic or entire group"""
+    indexed_messages = []
+    
+    try:
+        print(f"🔍 Searching for messages with Index numbers...")
+        
+        message_count = 0
+        async for msg in client.iter_messages(group_id, limit=2000):  # Increased limit
+            message_count += 1
+            
+            # Check if message is in the specific topic (if topic_id provided)
+            in_topic = True
+            if topic_id:
+                in_topic = False
+                if (hasattr(msg, 'reply_to') and msg.reply_to and 
+                    hasattr(msg.reply_to, 'reply_to_msg_id') and 
+                    msg.reply_to.reply_to_msg_id == topic_id):
+                    in_topic = True
+                elif msg.id == topic_id:
+                    in_topic = True
+            
+            # Only process messages with media and in the correct topic
+            if msg.media and in_topic:
+                # Get caption from message
+                caption = ""
+                if hasattr(msg, 'caption') and msg.caption:
+                    caption = msg.caption
+                elif hasattr(msg, 'message') and msg.message:
+                    caption = msg.message
+                elif hasattr(msg, 'text') and msg.text:
+                    caption = msg.text
+                
+                # Extract index number
+                index_num = extract_index_number(caption)
+                if index_num is not None:
+                    indexed_messages.append({
+                        'message': msg,
+                        'index': index_num,
+                        'caption': caption,
+                        'msg_id': msg.id
+                    })
+                    print(f"📋 Found: Index {index_num} (Message ID: {msg.id})")
+        
+        print(f"🔍 Scanned {message_count} messages total")
+        print(f"✅ Found {len(indexed_messages)} messages with Index numbers")
+        
+    except Exception as e:
+        print(f"❌ Error getting indexed messages: {e}")
+    
+    return indexed_messages
+
+
+async def send_to_topic(client, entity, file, caption, topic_id):
+    """Send file to a specific topic in a group"""
+    try:
+        await client.send_file(
+            entity=entity,
+            file=file,
+            caption=caption,
+            force_document=False,
+            reply_to=topic_id
+        )
+        return True
+    except Exception as e:
+        print(f"❌ Error sending to topic: {e}")
+        return False
+
+
+async def main():
+    client = TelegramClient(session_name, api_id, api_hash)
+    await client.start()
+    print("✅ Logged in successfully.")
+
+    # Get messages with Index numbers
+    print(f"🔍 Getting messages with Index numbers from topic {SOURCE_TOPIC}...")
+    indexed_messages = await get_indexed_messages(client, SOURCE_GROUP, SOURCE_TOPIC)
+    
+    if not indexed_messages:
+        print("⚠️ No messages with Index numbers found in the specific topic.")
+        print("🔍 Trying to get indexed messages from the entire group...")
+        
+        # Fallback: Get indexed messages from entire group
+        indexed_messages = await get_indexed_messages(client, SOURCE_GROUP, None)
+
+    if not indexed_messages:
+        print("❌ No messages with Index numbers found.")
+        return
+
+    # Sort messages by index number in ascending order
+    indexed_messages.sort(key=lambda x: x['index'])
+    
+    print(f"\n📋 Messages found with Index numbers:")
+    for item in indexed_messages:
+        print(f"  Index {item['index']:03d} - Message ID: {item['msg_id']}")
+    
+    print(f"\n📤 Starting to forward {len(indexed_messages)} messages in Index order...")
+    
+    forwarded_count = 0
+    
+    # Process messages in index order (ascending)
+    for i, item in enumerate(indexed_messages, 1):
+        msg = item['message']
+        index_num = item['index']
+        original_caption = item['caption']
+        
+        # Clean the caption
+        caption = clean_caption(original_caption)
+        
+        print(f"\n📤 Processing {i}/{len(indexed_messages)} - Index {index_num:03d} (Message ID: {msg.id})")
+        print(f"📝 Original caption: {original_caption[:100]}..." if len(original_caption) > 100 else f"📝 Original caption: {original_caption}")
+        print(f"🧹 Cleaned caption: {caption[:100]}..." if len(caption) > 100 else f"🧹 Cleaned caption: {caption}")
+        
+        success_count = 0
+        
+        try:
+            # Send to channel first
+            try:
+                await client.send_file(
+                    entity=TARGET_CHANNEL,
+                    file=msg.media,
+                    caption=caption,
+                    force_document=False
+                )
+                success_count += 1
+                print(f"  ✅ Sent to channel")
+            except Exception as e:
+                print(f"  ❌ Failed to send to channel: {e}")
+
+            # Send to group topic
+            try:
+                topic_success = await send_to_topic(
+                    client, TARGET_GROUP, msg.media, caption, TARGET_TOPIC
+                )
+                if topic_success:
+                    success_count += 1
+                    print(f"  ✅ Sent to group topic")
+                else:
+                    print(f"  ❌ Failed to send to group topic")
+            except Exception as e:
+                print(f"  ❌ Error sending to topic: {e}")
+
+            if success_count > 0:
+                forwarded_count += 1
+                print(f"✅ Index {index_num:03d} processed successfully ({success_count}/2 destinations)")
+            else:
+                print(f"❌ Index {index_num:03d} failed to send to any destination")
+            
+            # Add delay to avoid flood limits
+            print(f"⏳ Waiting 3 seconds before next message...")
+            await asyncio.sleep(3)
+
+        except FloodWaitError as e:
+            print(f"⏳ Flood wait for {e.seconds} seconds")
+            await asyncio.sleep(e.seconds)
+            # Retry the same message
+            i -= 1
+            continue
+            
+        except Exception as e:
+            print(f"❌ Unexpected error with Index {index_num:03d}: {e}")
+            continue
+
+    print(f"\n🎯 Forwarding completed!")
+    print(f"📊 Successfully processed {forwarded_count}/{len(indexed_messages)} indexed messages.")
+    print(f"✨ All messages sent in Index number sequence (ascending order).")
+
+if __name__ == "__main__":
+    asyncio.run(main())
